@@ -46,6 +46,7 @@ public class PsqlJsonbSinkTask extends SinkTask {
         table = props.get(PsqlJsonbSinkConnector.TABLE_CONFIG);
         keyColumn = props.get(PsqlJsonbSinkConnector.KEY_COLUMN_CONFIG);
         valueColumn = props.get(PsqlJsonbSinkConnector.VALUE_COLUMN_CONFIG);
+        String maybeKeyColumnComma = (keyColumn == null) ? (keyColumn + ", ") : "";
         try {
             connection = DriverManager.getConnection(connectString, user, password);
             createTempTable = connection.prepareStatement(
@@ -54,13 +55,13 @@ public class PsqlJsonbSinkTask extends SinkTask {
                     "ALTER TABLE temp0 ALTER COLUMN " + valueColumn
                             + " TYPE json USING to_json(" + valueColumn + ")");
             copyTempTable = connection.prepareStatement(
-                    "INSERT INTO " + table + " SELECT " + keyColumn
-                            + ", " + valueColumn + "::jsonb FROM temp0");
+                    "INSERT INTO " + table + " SELECT " + maybeKeyColumnComma
+                            + valueColumn + "::jsonb FROM temp0");
             dropTempTable = connection.prepareStatement("DROP TABLE temp0");
         } catch (SQLException e) {
             throw new ConnectException("Failed to get database connection", e);
         }
-        copyInStatement = "COPY temp0 (" + keyColumn + ", " + valueColumn + ") FROM STDIN WITH BINARY";
+        copyInStatement = "COPY temp0 (" + maybeKeyColumnComma + valueColumn + ") FROM STDIN WITH BINARY";
     }
 
     @Override
@@ -92,14 +93,23 @@ public class PsqlJsonbSinkTask extends SinkTask {
                 // 2 bytes field count
                 // <each field> 4 bytes field length, in bytes (-1 if NULL)
                 //              data bytes
-                byte[] valueBytes = record.value().toString().getBytes("UTF-8");
-
                 data.writeShort((short) 2); // number of fields
                 if (record.key() == null) {
                     data.writeInt(-1); // -1 for NULL
+                } else {
+                    String keyString = record.key().toString();
+                    byte[] keyBytes = keyString.getBytes("UTF-8");
+                    data.writeInt(keyBytes.length);
+                    data.write(keyBytes);
                 }
-                data.writeInt(valueBytes.length);
-                data.write(valueBytes);
+                if (record.value() == null) {
+                    data.writeInt(-1);
+                } else {
+                    String valueString = record.value().toString();
+                    byte[] valueBytes = valueString.getBytes("UTF-8");
+                    data.writeInt(valueBytes.length);
+                    data.write(valueBytes);
+                }
             }
             data.writeShort((short) -1); // file trailer
             ByteArrayInputStream inputBytes = new ByteArrayInputStream(bytes.toByteArray());
