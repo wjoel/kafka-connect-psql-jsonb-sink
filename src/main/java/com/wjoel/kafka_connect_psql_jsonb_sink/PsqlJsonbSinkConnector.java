@@ -39,10 +39,10 @@ public class PsqlJsonbSinkConnector extends SinkConnector {
 
     @Override
     public void start(Map<String, String> props) throws ConnectException {
-        log.warn("connectstring is something");
         try {
             Class.forName("org.postgresql.Driver");
         } catch (java.lang.ClassNotFoundException e) {
+            log.error("Failed to load PostgreSQL driver");
             throw new ConnectException("Failed to load PostgreSQL driver");
         }
         connectString = props.get(CONNECT_STRING_CONFIG);

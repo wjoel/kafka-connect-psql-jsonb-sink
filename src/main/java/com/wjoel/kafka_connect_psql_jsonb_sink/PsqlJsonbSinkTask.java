@@ -32,35 +32,44 @@ public class PsqlJsonbSinkTask extends SinkTask {
     private PreparedStatement changeTempTableValueType;
     private PreparedStatement copyTempTable;
     private PreparedStatement dropTempTable;
-
-    private String copyInStatement;
+    private String copyInSql;
 
     @Override
     public String version() { return new PsqlJsonbSinkConnector().version(); }
 
     @Override
     public void start(Map<String, String> props) {
+        log.info("Starting with properties " + props.toString());
         connectString = props.get(PsqlJsonbSinkConnector.CONNECT_STRING_CONFIG);
         user = props.get(PsqlJsonbSinkConnector.USER_CONFIG);
         password = props.get(PsqlJsonbSinkConnector.PASSWORD_CONFIG);
         table = props.get(PsqlJsonbSinkConnector.TABLE_CONFIG);
-        keyColumn = props.get(PsqlJsonbSinkConnector.KEY_COLUMN_CONFIG);
+        String keyColumnConfig = props.get(PsqlJsonbSinkConnector.KEY_COLUMN_CONFIG);
+        if (keyColumnConfig != null && keyColumnConfig.length() > 0) {
+            keyColumn = keyColumnConfig;
+        } else {
+            keyColumn = null;
+        }
         valueColumn = props.get(PsqlJsonbSinkConnector.VALUE_COLUMN_CONFIG);
+        String maybeKeyColumnComma = (keyColumn == null) ? "" : (keyColumn + ", ");
         try {
             connection = DriverManager.getConnection(connectString, user, password);
-            createTempTable = connection.prepareStatement(
-                    "CREATE TEMP TABLE temp0 AS SELECT * FROM " + table + " LIMIT 0");
+            String createTempTableSql = "CREATE TEMP TABLE temp0 AS SELECT * FROM " + table + " LIMIT 0";
+            log.info("Creating table using: " + createTempTableSql);
+            createTempTable = connection.prepareStatement(createTempTableSql);
             changeTempTableValueType = connection.prepareStatement(
                     "ALTER TABLE temp0 ALTER COLUMN " + valueColumn
                             + " TYPE json USING to_json(" + valueColumn + ")");
-            copyTempTable = connection.prepareStatement(
-                    "INSERT INTO " + table + " SELECT " + keyColumn
-                            + ", " + valueColumn + "::jsonb FROM temp0");
+            String insertTempTableSql = "INSERT INTO " + table + " SELECT " + maybeKeyColumnComma
+                + valueColumn + "::jsonb FROM temp0";
+            log.info("Creating table using: " + insertTempTableSql);
+            copyTempTable = connection.prepareStatement(insertTempTableSql);
             dropTempTable = connection.prepareStatement("DROP TABLE temp0");
         } catch (SQLException e) {
             throw new ConnectException("Failed to get database connection", e);
         }
-        copyInStatement = "COPY temp0 (" + keyColumn + ", " + valueColumn + ") FROM STDIN WITH BINARY";
+        copyInSql = "COPY temp0 (" + maybeKeyColumnComma + valueColumn + ") FROM STDIN WITH BINARY";
+        log.info("Copying from temp table using: " + copyInSql);
     }
 
     @Override
@@ -92,14 +101,30 @@ public class PsqlJsonbSinkTask extends SinkTask {
                 // 2 bytes field count
                 // <each field> 4 bytes field length, in bytes (-1 if NULL)
                 //              data bytes
-                byte[] valueBytes = record.value().toString().getBytes("UTF-8");
-
-                data.writeShort((short) 2); // number of fields
-                if (record.key() == null) {
-                    data.writeInt(-1); // -1 for NULL
+                if (keyColumn != null) {
+                    data.writeShort((short) 2); // number of fields
+                } else {
+                    data.writeShort((short) 1);
                 }
-                data.writeInt(valueBytes.length);
-                data.write(valueBytes);
+
+                if (keyColumn != null) {
+                    if (record.key() == null) {
+                        data.writeInt(-1); // -1 for NULL
+                    } else {
+                        String keyString = record.key().toString();
+                        byte[] keyBytes = keyString.getBytes("UTF-8");
+                        data.writeInt(keyBytes.length);
+                        data.write(keyBytes);
+                    }
+                }
+                if (record.value() == null) {
+                    data.writeInt(-1);
+                } else {
+                    String valueString = record.value().toString();
+                    byte[] valueBytes = valueString.getBytes("UTF-8");
+                    data.writeInt(valueBytes.length);
+                    data.write(valueBytes);
+                }
             }
             data.writeShort((short) -1); // file trailer
             ByteArrayInputStream inputBytes = new ByteArrayInputStream(bytes.toByteArray());
@@ -107,7 +132,7 @@ public class PsqlJsonbSinkTask extends SinkTask {
             connection.setAutoCommit(false);
             createTempTable.execute();
             changeTempTableValueType.execute();
-            cm.copyIn(copyInStatement, inputBytes);
+            cm.copyIn(copyInSql, inputBytes);
             copyTempTable.execute();
             dropTempTable.execute();
             connection.commit();
@@ -140,7 +165,9 @@ public class PsqlJsonbSinkTask extends SinkTask {
     @Override
     public void stop() {
         try {
-            connection.close();
+            if (connection != null) {
+                connection.close();
+            }
         } catch (SQLException e) {
             for (SQLException sqlException = e;
                  sqlException != null;
