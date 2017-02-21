@@ -6,7 +6,7 @@
 
   <groupId>com.wjoel</groupId>
   <artifactId>kafka-connect-psql-jsonb-sink</artifactId>
-  <version>0.1-SNAPSHOT</version>
+  <version>0.2</version>
   <packaging>jar</packaging>
 
   <url>https://github.com/wjoel/kafka-connect-psql-jsonb-sink</url>
