@@ -61,7 +61,7 @@ public class PsqlJsonbSinkTask extends SinkTask {
                     "ALTER TABLE temp0 ALTER COLUMN " + valueColumn
                             + " TYPE json USING to_json(" + valueColumn + ")");
             String insertTempTableSql = "INSERT INTO " + table + " SELECT " + maybeKeyColumnComma
-                + valueColumn + "::jsonb FROM temp0";
+                + valueColumn + "::jsonb FROM temp0 ON CONFLICT DO NOTHING";
             log.info("Creating table using: " + insertTempTableSql);
             copyTempTable = connection.prepareStatement(insertTempTableSql);
             dropTempTable = connection.prepareStatement("DROP TABLE temp0");
